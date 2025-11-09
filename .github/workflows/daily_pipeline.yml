@@ -1,0 +1,56 @@
+name: daily-exchange-rates
+
+on:
+  schedule:
+    - cron: '0 16 * * *' # 00:00 Australia/Perth -> 16:00 UTC previous day
+  workflow_dispatch: {}
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f fetch_historical_exchange_rate/requirements.txt ]; then
+            pip install -r fetch_historical_exchange_rate/requirements.txt
+          else
+            pip install requests pandas sqlalchemy python-dotenv
+          fi
+
+      - name: Prepare .env (from Secrets)
+        run: |
+          echo "EXCHANGE_API_KEY=${{ secrets.EXCHANGE_API_KEY }}" > fetch_historical_exchange_rate/.env
+
+      - name: Run fetch step
+        working-directory: fetch_historical_exchange_rate
+        run: python3 scripts/fetch_historical_rate.py
+
+      - name: Run ETL step
+        working-directory: fetch_historical_exchange_rate
+        run: python3 scripts/extract_transform.py
+
+      - name: Ensure artifact paths exist
+        run: |
+          ls -la fetch_historical_exchange_rate || true
+          ls -la fetch_historical_exchange_rate/data || true
+
+      - name: Upload exchange_rates.db artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exchange_rates_db
+          path: fetch_historical_exchange_rate/exchange_rates.db
+
+      - name: Upload pipeline logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-logs
+          path: fetch_historical_exchange_rate/data/logs/
