@@ -209,3 +209,5 @@ __marimo__/
 # macOS
 .DS_Store
 .env
+.DS_Store
+./fetch_historical_exchange_rate/.DS_Store
