@@ -3,10 +3,13 @@ import json
 from pathlib import Path
 from sqlalchemy import create_engine, text
 
-file_path = "../data/historical_exchange_rates.json"
+base_dir = Path(__file__).resolve().parents[1]   # fetch_historical_exchange_rate/
+data_dir = base_dir / "data"    
+data_dir.mkdir(parents=True, exist_ok=True)
+source_file_path = data_dir / "historical_exchange_rates.json"
 
 # Step 1: Load JSON
-with open(file_path) as f:
+with open(source_file_path) as f:
     data = json.load(f)
 
 # Step 2: Flatten nested JSON into records
@@ -35,7 +38,6 @@ print(df.head())
 engine = None
 try:
     # place DB in fetch_historical_exchange_rate directory (one level up from scripts/)
-    base_dir = Path(__file__).resolve().parents[1]
     db_path = base_dir / "exchange_rates.db"
 
     engine = create_engine(f"sqlite:///{db_path}")
