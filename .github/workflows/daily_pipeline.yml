@@ -49,6 +49,11 @@ jobs:
         run: |
           touch fetch_historical_exchange_rate/data/logs/.gitkeep
 
+      - name: Ensure artifact paths exist
+        run: |
+          ls -la fetch_historical_exchange_rate || true
+          ls -la fetch_historical_exchange_rate/data || true
+
       - name: Upload exchange_rates.db artifact
         uses: actions/upload-artifact@v4
         with:
@@ -60,3 +65,25 @@ jobs:
         with:
           name: pipeline-logs
           path: fetch_historical_exchange_rate/data/logs/**
+
+      # --- New: upload DB to Google Cloud Storage ---
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Upload exchange_rates.db to GCS
+        env:
+          BUCKET: ${{ secrets.GCS_BUCKET }}
+          PREFIX: ${{ secrets.GCS_PATH || 'exchange_rates' }}
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          SRC="fetch_historical_exchange_rate/exchange_rates.db"
+          DEST="gs://$BUCKET/${PREFIX}/exchange_rates-$TIMESTAMP.db"
+          echo "Uploading $SRC -> $DEST"
+          gsutil cp "$SRC" "$DEST"
