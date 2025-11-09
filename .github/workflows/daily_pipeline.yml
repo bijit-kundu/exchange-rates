@@ -30,18 +30,24 @@ jobs:
         run: |
           echo "EXCHANGE_API_KEY=${{ secrets.EXCHANGE_API_KEY }}" > fetch_historical_exchange_rate/.env
 
-      - name: Run fetch step
-        working-directory: fetch_historical_exchange_rate
-        run: python3 scripts/fetch_historical_rate.py
+      - name: Ensure data & logs dir exists
+        run: mkdir -p fetch_historical_exchange_rate/data/logs
 
-      - name: Run ETL step
+      - name: Run fetch step (log output)
         working-directory: fetch_historical_exchange_rate
-        run: python3 scripts/extract_transform.py
-
-      - name: Ensure artifact paths exist
         run: |
-          ls -la fetch_historical_exchange_rate || true
-          ls -la fetch_historical_exchange_rate/data || true
+          mkdir -p data/logs
+          python3 scripts/fetch_historical_rate.py >> data/logs/fetch_historical_rate.log 2>&1
+
+      - name: Run ETL step (log output)
+        working-directory: fetch_historical_exchange_rate
+        run: |
+          mkdir -p data/logs
+          python3 scripts/extract_transform.py >> data/logs/extract_transform.log 2>&1
+
+      - name: Ensure at least one log file exists (placeholder)
+        run: |
+          touch fetch_historical_exchange_rate/data/logs/.gitkeep
 
       - name: Upload exchange_rates.db artifact
         uses: actions/upload-artifact@v4
@@ -53,4 +59,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pipeline-logs
-          path: fetch_historical_exchange_rate/data/logs/
+          path: fetch_historical_exchange_rate/data/logs/**
