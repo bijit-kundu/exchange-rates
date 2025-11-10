@@ -2,7 +2,7 @@ import csv
 from pathlib import Path
 from sqlalchemy import create_engine, text
 
-# DB path (same parent used by your other scripts)
+# DB path 
 base_dir = Path(__file__).resolve().parents[1]
 db_path = base_dir / "exchange_rates.db"
 engine = create_engine(f"sqlite:///{db_path}")
@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS dim_currency (
 );
 """
 
-# Default seed (your example). If you want "all currencies", provide a CSV at ../data/currencies.csv
 # CSV format: currency_code,currency_name,region
 default_rows = [
     ("EUR", "Euro"),
@@ -24,7 +23,7 @@ default_rows = [
     ("USD", "US Dollar"),
 ]
 
-csv_path = base_dir / "data" / "currencies.csv"
+csv_path = base_dir / "data" / "currencies.csv"  # path to the input CSV (data/currencies.csv) used to seed dim_currency; header row is skipped
 
 with engine.begin() as conn:
     conn.execute(text(create_sql))

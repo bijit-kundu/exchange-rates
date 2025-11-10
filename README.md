@@ -1,4 +1,4 @@
-# exchange-rates — Portfolio
+# exchange-rates - Portfolio
 
 A small end-to-end project that fetches historical foreign exchange rates, enriches currency metadata, and stores cleaned data in a local SQLite data warehouse. Includes automation via GitHub Actions and optional persistence to Google Cloud Storage (GCS).  
 
