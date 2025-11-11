@@ -2,7 +2,9 @@
 extract_transform.py
 
 Reads historical_exchange_rates.json, flattens the nested "rates" structure into a tidy
-DataFrame, and loads new rows into the SQLite fact table `fact_exchange_rate`.
+DataFrame, and writes the results into BigQuery tables:
+- fact_exchange_rate
+- dim_time (calendar dimension regenerated each run)
 
 Behaviours:
 - Resolves file paths relative to this script.
@@ -13,10 +15,13 @@ Behaviours:
   comparing keys already in the DB.
 - Disposes SQLAlchemy engine cleanly.
 """
-import pandas as pd
+import os
 import json
 from pathlib import Path
-from sqlalchemy import create_engine, text
+
+import pandas as pd
+from google.api_core.exceptions import NotFound
+from google.cloud import bigquery
 
 base_dir = Path(__file__).resolve().parents[1]
 data_dir = base_dir / "data"
@@ -65,62 +70,166 @@ df["exchange_date"] = pd.to_datetime(df["exchange_date"], errors="coerce")
 df = df.dropna(subset=["exchange_date"])
 df = df.sort_values(by=["exchange_date", "target_currency"])
 
-# Database path and engine configuration
-db_path = base_dir / "exchange_rates.db"
-engine = create_engine(f"sqlite:///{db_path}", connect_args={"timeout": 30, "check_same_thread": False})
+# Build dim_time rows from the exchange_date column
+dim_time_df = (
+    df["exchange_date"]
+    .dt.normalize()
+    .drop_duplicates()
+    .sort_values()
+    .to_frame(name="date")
+)
+
+if dim_time_df.empty:
+    print("No calendar dates derived from exchange_rate data. Exiting.")
+    raise SystemExit(0)
+
+dim_time_df["date_key"] = dim_time_df["date"].dt.strftime("%Y%m%d").astype(int)
+dim_time_df["day_of_week"] = dim_time_df["date"].dt.dayofweek + 1  # 1 = Monday
+dim_time_df["day_name"] = dim_time_df["date"].dt.day_name()
+dim_time_df["month"] = dim_time_df["date"].dt.month
+dim_time_df["month_name"] = dim_time_df["date"].dt.strftime("%B")
+dim_time_df["quarter"] = dim_time_df["date"].dt.quarter
+dim_time_df["year"] = dim_time_df["date"].dt.year
+dim_time_df["week_start_date"] = (
+    dim_time_df["date"] - pd.to_timedelta(dim_time_df["date"].dt.dayofweek, unit="D")
+)
+dim_time_df["is_weekend"] = dim_time_df["day_of_week"].isin([6, 7]).astype(int)
+
+dim_time_df["date"] = dim_time_df["date"].dt.date
+dim_time_df["week_start_date"] = dim_time_df["week_start_date"].dt.date
+dim_time_df = dim_time_df[
+    [
+        "date_key",
+        "date",
+        "day_of_week",
+        "day_name",
+        "is_weekend",
+        "week_start_date",
+        "month",
+        "month_name",
+        "quarter",
+        "year",
+    ]
+]
+
+# --- BigQuery configuration ---
+project_id = os.getenv("BQ_PROJECT", "my-project-lab-477712")
+dataset_id = os.getenv("BQ_DATASET", "exchange-rates")
+dataset_ref = bigquery.DatasetReference(project_id, dataset_id)
+
+client = bigquery.Client(project=project_id)
 
 try:
-    create_table_sql = """
-    CREATE TABLE IF NOT EXISTS fact_exchange_rate (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        exchange_date DATE NOT NULL,
-        base_currency CHAR(3) NOT NULL,
-        target_currency CHAR(3) NOT NULL,
-        rate REAL,
-        timestamp TEXT,
-        fetched_at TEXT
-    );
-    """
+    client.get_dataset(dataset_ref)
+except NotFound:
+    dataset = bigquery.Dataset(dataset_ref)
+    dataset.location = os.getenv("BQ_LOCATION")
+    dataset = client.create_dataset(dataset)
+    print(f"Created dataset {dataset.full_dataset_id}")
 
-    with engine.begin() as conn:
-        # Ensure table exists
-        conn.execute(text(create_table_sql))
+fact_table_id = f"{project_id}.{dataset_id}.fact_exchange_rate"
+dim_time_table_id = f"{project_id}.{dataset_id}.dim_time"
 
-        # Read existing keys to prevent duplicates
-        existing_keys = set()
-        try:
-            existing = pd.read_sql_query(
-                "SELECT exchange_date, base_currency, target_currency FROM fact_exchange_rate",
-                conn
-            )
-            existing["exchange_date"] = pd.to_datetime(existing["exchange_date"], errors="coerce").dt.date.astype(str)
-            existing_keys = set(zip(existing["exchange_date"], existing["base_currency"], existing["target_currency"]))
-        except Exception:
-            existing_keys = set()
 
-        # Prepare df for insertion and filter out already-present rows
-        df_to_insert = df.copy()
-        df_to_insert["exchange_date"] = df_to_insert["exchange_date"].dt.date.astype(str)
-        df_to_insert["base_currency"] = df_to_insert["base_currency"].astype(str)
-        df_to_insert["target_currency"] = df_to_insert["target_currency"].astype(str)
+def ensure_table(table_id: str, schema, time_partitioning=None):
+    try:
+        client.get_table(table_id)
+    except NotFound:
+        table = bigquery.Table(table_id, schema=schema)
+        if time_partitioning:
+            table.time_partitioning = time_partitioning
+        client.create_table(table)
+        print(f"Created table {table_id}")
 
-        df_to_insert["__key"] = list(zip(
-            df_to_insert["exchange_date"],
-            df_to_insert["base_currency"],
-            df_to_insert["target_currency"]
-        ))
-        df_to_insert = df_to_insert[~df_to_insert["__key"].isin(existing_keys)].drop(columns=["__key"])
 
-        if df_to_insert.empty:
-            print("No new rows to insert into fact_exchange_rate.")
-        else:
-            df_to_insert.to_sql("fact_exchange_rate", conn, if_exists="append", index=False)
-            print(f"Inserted {len(df_to_insert)} new rows into fact_exchange_rate.")
+fact_schema = [
+    bigquery.SchemaField("exchange_date", "DATE", mode="REQUIRED"),
+    bigquery.SchemaField("base_currency", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("target_currency", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("rate", "FLOAT"),
+    bigquery.SchemaField("timestamp", "STRING"),
+    bigquery.SchemaField("fetched_at", "TIMESTAMP"),
+]
 
-    # Verify total rows after load
-    verification = pd.read_sql_query("SELECT COUNT(*) AS cnt FROM fact_exchange_rate", engine)
-    total_rows = int(verification.at[0, "cnt"])
-    print(f"Total rows in fact_exchange_rate: {total_rows}")
+dim_time_schema = [
+    bigquery.SchemaField("date_key", "INT64", mode="REQUIRED"),
+    bigquery.SchemaField("date", "DATE", mode="REQUIRED"),
+    bigquery.SchemaField("day_of_week", "INT64", mode="REQUIRED"),
+    bigquery.SchemaField("day_name", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("is_weekend", "BOOL", mode="REQUIRED"),
+    bigquery.SchemaField("week_start_date", "DATE", mode="REQUIRED"),
+    bigquery.SchemaField("month", "INT64", mode="REQUIRED"),
+    bigquery.SchemaField("month_name", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("quarter", "INT64", mode="REQUIRED"),
+    bigquery.SchemaField("year", "INT64", mode="REQUIRED"),
+]
 
-finally:
-    engine.dispose()
+ensure_table(
+    fact_table_id,
+    fact_schema,
+    time_partitioning=bigquery.TimePartitioning(field="exchange_date"),
+)
+ensure_table(dim_time_table_id, dim_time_schema)
+
+# Load/refresh dim_time (truncate + reload)
+dim_time_job_cfg = bigquery.LoadJobConfig(
+    write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+    schema=dim_time_schema,
+)
+dim_time_load = client.load_table_from_dataframe(dim_time_df, dim_time_table_id, job_config=dim_time_job_cfg)
+dim_time_load.result()
+print(f"Loaded {len(dim_time_df)} rows into {dim_time_table_id}.")
+
+# Prepare fact data and drop duplicates already present in BigQuery
+df_to_insert = df.copy()
+df_to_insert["exchange_date"] = df_to_insert["exchange_date"].dt.date
+df_to_insert["base_currency"] = df_to_insert["base_currency"].astype(str)
+df_to_insert["target_currency"] = df_to_insert["target_currency"].astype(str)
+df_to_insert["rate"] = pd.to_numeric(df_to_insert["rate"], errors="coerce")
+df_to_insert["timestamp"] = df_to_insert["timestamp"].astype(str)
+df_to_insert["fetched_at"] = pd.to_datetime(df_to_insert["fetched_at"], errors="coerce")
+
+min_date = df_to_insert["exchange_date"].min()
+max_date = df_to_insert["exchange_date"].max()
+
+existing_keys = set()
+query = f"""
+SELECT exchange_date, base_currency, target_currency
+FROM `{fact_table_id}`
+WHERE exchange_date BETWEEN @min_date AND @max_date
+"""
+query_job = client.query(
+    query,
+    job_config=bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("min_date", "DATE", min_date),
+            bigquery.ScalarQueryParameter("max_date", "DATE", max_date),
+        ]
+    ),
+)
+for row in query_job:
+    existing_keys.add((row.exchange_date, row.base_currency, row.target_currency))
+
+df_to_insert["__key"] = list(
+    zip(
+        df_to_insert["exchange_date"],
+        df_to_insert["base_currency"],
+        df_to_insert["target_currency"],
+    )
+)
+df_to_insert = df_to_insert[~df_to_insert["__key"].isin(existing_keys)].drop(columns="__key")
+
+if df_to_insert.empty:
+    print("No new rows to insert into fact_exchange_rate.")
+else:
+    fact_job_cfg = bigquery.LoadJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        schema=fact_schema,
+    )
+    load_job = client.load_table_from_dataframe(df_to_insert, fact_table_id, job_config=fact_job_cfg)
+    load_job.result()
+    print(f"Inserted {len(df_to_insert)} new rows into {fact_table_id}.")
+
+count_job = client.query(f"SELECT COUNT(*) AS cnt FROM `{fact_table_id}`")
+total_rows = next(count_job.result()).cnt
+print(f"Total rows in {fact_table_id}: {total_rows}")
