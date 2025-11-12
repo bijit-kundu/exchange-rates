@@ -213,4 +213,5 @@ __marimo__/
 ./fetch_historical_exchange_rate/.DS_Store
 
 issues.txt
+currencies.csv
 historical_exchange_rates.json
