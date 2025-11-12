@@ -1,9 +1,9 @@
 """
-Fetch historical exchange rates and append responses to a JSON file.
+Fetch recent exchange rates and append responses to the historical JSON cache.
 
 - Loads API key from repo root .env
-- Resolves data dir relative to this script so it works regardless of CWD
-- Fetches the last 15 days (skipping dates already present)
+- Resolves file paths relative to this script
+- Fetches the last N days (default: 1, configurable via FETCH_DAYS env var)
 - Writes a Perth (Australia) timestamp into each record (fetched_at)
 - Appends results to data/historical_exchange_rates.json (creates file if missing)
 """
@@ -30,8 +30,9 @@ if not API_KEY:
 
 # API details (adjust BASE_URL for your provider)
 BASE_URL = "https://api.exchangeratesapi.io/v1/"
-BASE_CURRENCY = "EUR"
-SYMBOLS = "GBP,AUD,USD"
+BASE_CURRENCY = os.getenv("BASE_CURRENCY", "AUD")
+SYMBOLS = os.getenv("SYMBOLS", "EUR,USD,GBP,SGD")
+FETCH_DAYS = max(1, int(os.getenv("FETCH_DAYS", "1")))
 
 # Ensure data directory exists and point to output file
 data_dir = base_dir / "data"
@@ -64,9 +65,9 @@ params_template = {
 }
 headers = {}
 
-# Fetch last 15 days
+# Fetch last N days (default 1)
 today = date.today()
-for i in range(15):
+for i in range(FETCH_DAYS):
     d = today - timedelta(days=i)
     date_str = d.isoformat()  # YYYY-MM-DD
     if date_str in existing_dates:

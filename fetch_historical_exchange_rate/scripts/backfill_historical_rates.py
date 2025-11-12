@@ -30,6 +30,8 @@ from zoneinfo import ZoneInfo
 
 YEARS_TO_BACKFILL = int(os.getenv("BACKFILL_YEARS", "10"))
 CHUNKS = int(os.getenv("BACKFILL_CHUNKS", "5"))
+BACKFILL_START_DATE = os.getenv("BACKFILL_START_DATE")  # format YYYYMMDD or YYYY-MM-DD
+BACKFILL_END_DATE = os.getenv("BACKFILL_END_DATE")  # optional override
 BASE_URL = "https://api.exchangeratesapi.io/v1/"
 BASE_CURRENCY = os.getenv("BASE_CURRENCY", "AUD")
 SYMBOLS = os.getenv("SYMBOLS", "EUR,USD,GBP,SGD")
@@ -114,10 +116,28 @@ def fetch_date(target_date: date, params: dict) -> dict | None:
 def main():
     existing_data, existing_dates = load_existing_records(output_file)
 
-    end_date = date.today() - timedelta(days=1)
-    start_date = end_date - timedelta(days=YEARS_TO_BACKFILL * 365) + timedelta(days=1)
-    if start_date < date(1999, 1, 1):
-        start_date = date(1999, 1, 1)
+    if BACKFILL_END_DATE:
+        try:
+            normalized = BACKFILL_END_DATE.replace("-", "")
+            end_date = date.fromisoformat(f"{normalized[:4]}-{normalized[4:6]}-{normalized[6:]}")
+        except ValueError:
+            raise SystemExit(f"Invalid BACKFILL_END_DATE: {BACKFILL_END_DATE}")
+    else:
+        end_date = date.today() - timedelta(days=1)
+
+    if BACKFILL_START_DATE:
+        try:
+            normalized = BACKFILL_START_DATE.replace("-", "")
+            start_date = date.fromisoformat(f"{normalized[:4]}-{normalized[4:6]}-{normalized[6:]}")
+        except ValueError:
+            raise SystemExit(f"Invalid BACKFILL_START_DATE: {BACKFILL_START_DATE}")
+    else:
+        start_date = end_date - timedelta(days=YEARS_TO_BACKFILL * 365) + timedelta(days=1)
+        if start_date < date(1999, 1, 1):
+            start_date = date(1999, 1, 1)
+
+    if start_date > end_date:
+        raise SystemExit(f"Start date {start_date} is after end date {end_date}. Check BACKFILL_* env vars.")
 
     ranges = chunk_ranges(start_date, end_date, CHUNKS)
     if not ranges:

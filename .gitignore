@@ -214,4 +214,5 @@ __marimo__/
 
 issues.txt
 currencies.csv
-fetch_historical_exchange_rate/data/
+fetch_historical_exchange_rate/data/historical_exchange_rates.json
+fetch_historical_exchange_rate/scripts/test.py

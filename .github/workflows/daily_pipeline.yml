@@ -47,15 +47,6 @@ jobs:
           BQ_DATASET: ${{ secrets.BQ_DATASET }}
           BQ_LOCATION: ${{ secrets.BQ_LOCATION }}
 
-      - name: Run dim_currency load
-        working-directory: fetch_historical_exchange_rate
-        run: |
-          python3 scripts/create_dim_currency.py
-        env:
-          BQ_PROJECT: ${{ secrets.BQ_PROJECT }}
-          BQ_DATASET: ${{ secrets.BQ_DATASET }}
-          BQ_LOCATION: ${{ secrets.BQ_LOCATION }}
-
       - name: Run ETL step
         working-directory: fetch_historical_exchange_rate
         run: |

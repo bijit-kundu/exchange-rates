@@ -5,7 +5,8 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
 ## Highlights
 - Fetch AUD-based exchange rates (EUR, USD, GBP, SGD) for the last N days and persist API responses to JSON (`fetch_historical_exchange_rate/data/historical_exchange_rates.json`).
 - Add Australia/Perth timestamps to each record for auditing.
-- Transform JSON into a tidy fact table (`fact_exchange_rate`) and regenerate supporting dimensions (`dim_time`, `dim_currency`) directly in BigQuery.
+- Transform JSON into a tidy fact table (`fact_exchange_rate`) and regenerate the `dim_time` calendar dimension directly in BigQuery.
+- Maintain `dim_currency` via an on-demand script that MERGEs CSV updates into BigQuery (run when the seed list changes).
 - Deduplicate fact loads by comparing `(date_key, base_currency, target_currency)` keys already stored in BigQuery.
 - CI automation: GitHub Actions runs the fetch + dimension + fact steps daily at midnight Perth and on demand (`workflow_dispatch`), authenticating to GCP with a service account.
 - Power BI (or any BI tool) can connect straight to BigQuery to query curated fact/dimension tables.
@@ -52,7 +53,9 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
    ```
 6. Load dimensions/fact into BigQuery:
    ```bash
+   # Run only when currencies.csv changes
    python3 scripts/create_dim_currency.py
+   # Daily job
    python3 scripts/extract_transform.py
    ```
 7. Verify tables in BigQuery (`bq show` or the console) and connect your BI tool to the dataset.
@@ -66,7 +69,8 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
   2. Install dependencies (including BigQuery client/pyarrow).
   3. Write `.env` with `EXCHANGE_API_KEY`.
   4. Authenticate to GCP via `google-github-actions/auth` using `GCP_SA_KEY`.
-  5. Run `fetch_historical_rate.py`, `create_dim_currency.py`, and `extract_transform.py` (all targeting BigQuery). Logs stream to the Actions UI.
+  5. Run `fetch_historical_rate.py` and `extract_transform.py` (both targeting BigQuery). Logs stream to the Actions UI.
+- `create_dim_currency.py` is intentional manual/on-demand work: rerun it locally whenever `currencies.csv` changes, then re-run `extract_transform.py`.
 - Outputs: no SQLite artifacts; data lands in BigQuery directly, so analytics tools can refresh immediately after the workflow finishes.
 
 ## Implementation Summary

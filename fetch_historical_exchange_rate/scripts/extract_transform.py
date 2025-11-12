@@ -204,9 +204,10 @@ dim_time_job_cfg = bigquery.LoadJobConfig(
     write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
     schema=dim_time_schema,
 )
+print(f"Loading dim_time ({len(dim_time_df)} rows) into {dim_time_table_id}...")
 dim_time_load = client.load_table_from_dataframe(dim_time_df, dim_time_table_id, job_config=dim_time_job_cfg)
 dim_time_load.result()
-print(f"Loaded {len(dim_time_df)} rows into {dim_time_table_id}.")
+print(f"dim_time load complete.")
 
 # Prepare fact data and drop duplicates already present in BigQuery
 getcontext().prec = 38
@@ -252,6 +253,7 @@ df_to_insert = df_to_insert.drop(columns=["date"])
 
 min_key = int(df_to_insert["date_key"].min())
 max_key = int(df_to_insert["date_key"].max())
+print(f"Fact batch spans date_key range {min_key} -> {max_key}. Checking existing keys...")
 
 existing_keys = set()
 query = f"""
@@ -270,6 +272,7 @@ query_job = client.query(
 )
 for row in query_job:
     existing_keys.add((row.date_key, row.base_currency, row.target_currency))
+print(f"Existing keys within range: {len(existing_keys)}.")
 
 df_to_insert["__key"] = list(
     zip(
@@ -299,6 +302,7 @@ else:
     )
     try:
         validate_against_schema(df_to_insert, fact_schema)
+        print(f"Loading {len(df_to_insert)} rows into {fact_table_id}...")
         load_job = client.load_table_from_dataframe(df_to_insert, fact_table_id, job_config=fact_job_cfg)
         load_job.result()
     except Exception as exc:
