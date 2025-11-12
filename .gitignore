@@ -214,4 +214,4 @@ __marimo__/
 
 issues.txt
 currencies.csv
-historical_exchange_rates.json
+fetch_historical_exchange_rate/data/
