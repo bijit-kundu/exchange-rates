@@ -23,12 +23,17 @@ jobs:
           if [ -f fetch_historical_exchange_rate/requirements.txt ]; then
             pip install -r fetch_historical_exchange_rate/requirements.txt
           else
-            pip install requests pandas sqlalchemy python-dotenv
+            pip install requests pandas google-cloud-bigquery pyarrow python-dotenv
           fi
 
       - name: Prepare .env (from Secrets)
         run: |
           echo "EXCHANGE_API_KEY=${{ secrets.EXCHANGE_API_KEY }}" > fetch_historical_exchange_rate/.env
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Ensure data & logs dir exists
         run: mkdir -p fetch_historical_exchange_rate/data/logs
@@ -38,12 +43,30 @@ jobs:
         run: |
           mkdir -p data/logs
           python3 scripts/fetch_historical_rate.py >> data/logs/fetch_historical_rate.log 2>&1
+        env:
+          BQ_PROJECT: ${{ secrets.BQ_PROJECT }}
+          BQ_DATASET: ${{ secrets.BQ_DATASET }}
+          BQ_LOCATION: ${{ secrets.BQ_LOCATION }}
+
+      - name: Run dim_currency load (log output)
+        working-directory: fetch_historical_exchange_rate
+        run: |
+          mkdir -p data/logs
+          python3 scripts/create_dim_currency.py >> data/logs/create_dim_currency.log 2>&1
+        env:
+          BQ_PROJECT: ${{ secrets.BQ_PROJECT }}
+          BQ_DATASET: ${{ secrets.BQ_DATASET }}
+          BQ_LOCATION: ${{ secrets.BQ_LOCATION }}
 
       - name: Run ETL step (log output)
         working-directory: fetch_historical_exchange_rate
         run: |
           mkdir -p data/logs
           python3 scripts/extract_transform.py >> data/logs/extract_transform.log 2>&1
+        env:
+          BQ_PROJECT: ${{ secrets.BQ_PROJECT }}
+          BQ_DATASET: ${{ secrets.BQ_DATASET }}
+          BQ_LOCATION: ${{ secrets.BQ_LOCATION }}
 
       - name: Ensure at least one log file exists (placeholder)
         run: |
@@ -54,36 +77,8 @@ jobs:
           ls -la fetch_historical_exchange_rate || true
           ls -la fetch_historical_exchange_rate/data || true
 
-      - name: Upload exchange_rates.db artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: exchange_rates_db
-          path: fetch_historical_exchange_rate/exchange_rates.db
-
       - name: Upload pipeline logs
         uses: actions/upload-artifact@v4
         with:
           name: pipeline-logs
           path: fetch_historical_exchange_rate/data/logs/**
-
-      # --- New: upload DB to Google Cloud Storage ---
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v1
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v1
-        with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
-
-      - name: Upload exchange_rates.db to GCS
-        env:
-          BUCKET: ${{ secrets.GCS_BUCKET }}
-          PREFIX: ${{ secrets.GCS_PATH || 'exchange_rates' }}
-        run: |
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          SRC="fetch_historical_exchange_rate/exchange_rates.db"
-          DEST="gs://$BUCKET/${PREFIX}/exchange_rates-$TIMESTAMP.db"
-          echo "Uploading $SRC -> $DEST"
-          gsutil cp "$SRC" "$DEST"

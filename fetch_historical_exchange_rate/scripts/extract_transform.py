@@ -280,17 +280,15 @@ df_to_insert["__key"] = list(
 )
 df_to_insert = df_to_insert[~df_to_insert["__key"].isin(existing_keys)].drop(columns="__key")
 
-# Stable id derived from the natural key to keep deterministic values across reruns
 if not df_to_insert.empty:
     df_to_insert = df_to_insert.drop(columns=["exchange_date"])
-    df_to_insert["id"] = (
-        pd.util.hash_pandas_object(
-            df_to_insert[["date_key", "base_currency", "target_currency"]],
-            index=False
-        )
-        .astype("int64")
-        .abs()
-    )
+    max_id_query = client.query(f"SELECT COALESCE(MAX(id), 0) AS max_id FROM `{fact_table_id}`")
+    max_id = int(next(max_id_query.result()).max_id)
+    start_id = max_id + 1
+    df_to_insert["id"] = range(start_id, start_id + len(df_to_insert))
+    df_to_insert = df_to_insert[
+        ["id", "date_key", "base_currency", "target_currency", "rate", "timestamp", "fetched_at"]
+    ]
 
 if df_to_insert.empty:
     print("No new rows to insert into fact_exchange_rate.")

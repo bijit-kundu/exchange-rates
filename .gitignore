@@ -211,3 +211,5 @@ __marimo__/
 .env
 .DS_Store
 ./fetch_historical_exchange_rate/.DS_Store
+
+issues.txt

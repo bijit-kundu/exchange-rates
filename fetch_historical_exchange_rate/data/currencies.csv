@@ -94,7 +94,8 @@ MRO,Ouguiya
 MUR,Mauritius Rupee
 MVR,Rufiyaa
 MWK,Kwacha
-MXN MXV,Mexican Peso Mexican Unidad de Inversion (UDI)
+MXN MXV,Mexican Peso
+MXV,Mexican Unidad de Inversion (UDI)
 MYR,Malaysian Ringgit
 MZN,Metical
 NGN,Naira
@@ -126,7 +127,7 @@ SLL,Leone
 SOS,Somali Shilling
 SRD,Surinam Dollar
 STD,Dobra
-SVC USD,El Salvador Colon US Dollar
+SVC,El Salvador Colon
 SYP,Syrian Pound
 SZL,Lilangeni
 THB,Baht
@@ -141,7 +142,8 @@ TZS,Tanzanian Shilling
 UAH,Hryvnia
 UGX,Uganda Shilling
 USD,US Dollar
-UYU UYI,Peso Uruguayo Uruguay Peso en Unidades Indexadas
+UYU,Peso Uruguayo
+UYI,Uruguay Peso en Unidades Indexadas
 UZS,Uzbekistan Sum
 VEF,Bolivar Fuerte
 VND,Dong
@@ -164,7 +166,9 @@ XPT,Platinum
 XTS,Codes specifically reserved for testing purposes
 YER,Yemeni Rial
 ZAR,Rand
-ZAR LSL,Rand Loti
-ZAR NAD,Rand Namibia Dollar
+ZAR,Rand
+LSL,Loti
+ZAR,Rand 
+NAD,Namibia Dollar
 ZMK,Zambian Kwacha
 ZWL,Zimbabwe Dollar

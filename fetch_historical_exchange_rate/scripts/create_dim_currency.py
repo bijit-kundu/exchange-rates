@@ -1,21 +1,13 @@
 import csv
+import os
 from pathlib import Path
-from sqlalchemy import create_engine, text
 
-# DB path 
+from google.api_core.exceptions import NotFound
+from google.cloud import bigquery
+
 base_dir = Path(__file__).resolve().parents[1]
-db_path = base_dir / "exchange_rates.db"
-engine = create_engine(f"sqlite:///{db_path}")
+csv_path = base_dir / "data" / "currencies.csv"
 
-# SQL for creating dim_currency
-create_sql = """
-CREATE TABLE IF NOT EXISTS dim_currency (
-    currency_code CHAR(3) PRIMARY KEY,
-    currency_name VARCHAR(50)
-);
-"""
-
-# CSV format: currency_code,currency_name,region
 default_rows = [
     ("EUR", "Euro"),
     ("GBP", "British Pound"),
@@ -23,38 +15,93 @@ default_rows = [
     ("USD", "US Dollar"),
 ]
 
-csv_path = base_dir / "data" / "currencies.csv"  # path to the input CSV (data/currencies.csv) used to seed dim_currency; header row is skipped
+project_id = os.getenv("BQ_PROJECT", "my-project-lab-477712")
+dataset_id = os.getenv("BQ_DATASET", "exchange_rates")
+dataset_ref = bigquery.DatasetReference(project_id, dataset_id)
 
-with engine.begin() as conn:
-    conn.execute(text(create_sql))
-    # Optionally drop and recreate if you want a fresh table:
-    # conn.execute(text("DROP TABLE IF EXISTS dim_currency;"))
-    # conn.execute(text(create_sql))
+client = bigquery.Client(project=project_id)
 
-    # Load from CSV if present, otherwise use default_rows
-    rows = default_rows
-    if csv_path.exists():
-        with csv_path.open(newline="", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            # skip header row
-            next(reader, None)
-            rows = []
-            for r in reader:
-                if not r:
-                    continue
-                code = r[0].strip().upper()
+try:
+    client.get_dataset(dataset_ref)
+except NotFound:
+    dataset = bigquery.Dataset(dataset_ref)
+    dataset.location = os.getenv("BQ_LOCATION")
+    client.create_dataset(dataset)
+    print(f"Created dataset {dataset.full_dataset_id}")
+
+table_id = f"{project_id}.{dataset_id}.dim_currency"
+stage_table_id = f"{project_id}.{dataset_id}.dim_currency_stage"
+schema = [
+    bigquery.SchemaField("currency_code", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("currency_name", "STRING"),
+]
+
+try:
+    client.get_table(table_id)
+except NotFound:
+    table = bigquery.Table(table_id, schema=schema)
+    client.create_table(table)
+    print(f"Created table {table_id}")
+
+rows = default_rows
+if csv_path.exists():
+    with csv_path.open(newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        next(reader, None)
+        rows = []
+        for idx, r in enumerate(reader, start=2):
+            if not r:
+                continue
+            try:
+                codes = [token.strip().upper() for token in r[0].split() if token.strip()]
                 name = r[1].strip() if len(r) > 1 else ""
+            except Exception as exc:
+                raise ValueError(f"Failed parsing row {idx} in {csv_path}: {r}") from exc
+
+            for code in codes:
                 if len(code) == 3:
                     rows.append((code, name))
 
-    # Insert using parameterized statements; ignore duplicates via INSERT OR IGNORE
-    # Use named parameters and pass a dict for each row (safe and compatible with text())
-    insert_sql = "INSERT OR IGNORE INTO dim_currency (currency_code, currency_name) VALUES (:code, :name);"
-    try:
-        for code, name in rows:
-            conn.execute(text(insert_sql), {"code": code, "name": name})
-    except Exception:
-        raise
+if not rows:
+    raise SystemExit("No currency rows found to load.")
 
-print(f"✅ dim_currency created/updated in {db_path} — inserted {len(rows)} candidate rows (duplicates ignored).")
-print(f"ℹ️ To load a full list of currencies, create a CSV at: {csv_path} with: currency_code,currency_name")
+rows_payload = [
+    {"currency_code": code, "currency_name": name or None}
+    for code, name in rows
+]
+rows_payload.sort(key=lambda r: r["currency_code"])
+
+load_config = bigquery.LoadJobConfig(
+    write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+    schema=schema,
+)
+
+load_job = client.load_table_from_json(rows_payload, stage_table_id, job_config=load_config)
+load_job.result()
+print(f"Loaded {len(rows_payload)} rows into staging table {stage_table_id}.")
+
+merge_sql = f"""
+MERGE `{table_id}` T
+USING `{stage_table_id}` S
+ON T.currency_code = S.currency_code
+WHEN MATCHED THEN UPDATE SET currency_name = S.currency_name
+WHEN NOT MATCHED THEN INSERT (currency_code, currency_name)
+VALUES (S.currency_code, S.currency_name)
+"""
+
+try:
+    client.query(merge_sql).result()
+except Exception as exc:
+    preview = rows_payload[:5]
+    raise RuntimeError(
+        f"BigQuery merge failed while processing dim_currency rows (first rows={preview})"
+    ) from exc
+
+try:
+    client.delete_table(stage_table_id)
+    print(f"Dropped staging table {stage_table_id}.")
+except NotFound:
+    pass
+
+print(f"dim_currency upserted {len(rows_payload)} rows into {table_id}")
+print(f"To extend the dimension, edit CSV at {csv_path}")
