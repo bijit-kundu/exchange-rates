@@ -38,47 +38,34 @@ jobs:
       - name: Ensure data & logs dir exists
         run: mkdir -p fetch_historical_exchange_rate/data/logs
 
-      - name: Run fetch step (log output)
+      - name: Run fetch step
         working-directory: fetch_historical_exchange_rate
         run: |
-          mkdir -p data/logs
-          python3 scripts/fetch_historical_rate.py >> data/logs/fetch_historical_rate.log 2>&1
+          python3 scripts/fetch_historical_rate.py
         env:
           BQ_PROJECT: ${{ secrets.BQ_PROJECT }}
           BQ_DATASET: ${{ secrets.BQ_DATASET }}
           BQ_LOCATION: ${{ secrets.BQ_LOCATION }}
 
-      - name: Run dim_currency load (log output)
+      - name: Run dim_currency load
         working-directory: fetch_historical_exchange_rate
         run: |
-          mkdir -p data/logs
-          python3 scripts/create_dim_currency.py >> data/logs/create_dim_currency.log 2>&1
+          python3 scripts/create_dim_currency.py
         env:
           BQ_PROJECT: ${{ secrets.BQ_PROJECT }}
           BQ_DATASET: ${{ secrets.BQ_DATASET }}
           BQ_LOCATION: ${{ secrets.BQ_LOCATION }}
 
-      - name: Run ETL step (log output)
+      - name: Run ETL step
         working-directory: fetch_historical_exchange_rate
         run: |
-          mkdir -p data/logs
-          python3 scripts/extract_transform.py >> data/logs/extract_transform.log 2>&1
+          python3 scripts/extract_transform.py
         env:
           BQ_PROJECT: ${{ secrets.BQ_PROJECT }}
           BQ_DATASET: ${{ secrets.BQ_DATASET }}
           BQ_LOCATION: ${{ secrets.BQ_LOCATION }}
-
-      - name: Ensure at least one log file exists (placeholder)
-        run: |
-          touch fetch_historical_exchange_rate/data/logs/.gitkeep
 
       - name: Ensure artifact paths exist
         run: |
           ls -la fetch_historical_exchange_rate || true
           ls -la fetch_historical_exchange_rate/data || true
-
-      - name: Upload pipeline logs
-        uses: actions/upload-artifact@v4
-        with:
-          name: pipeline-logs
-          path: fetch_historical_exchange_rate/data/logs/**
