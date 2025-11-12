@@ -146,7 +146,7 @@ def ensure_table(table_id: str, schema, time_partitioning=None):
 
 fact_schema = [
     bigquery.SchemaField("id", "INT64", mode="REQUIRED"),
-    bigquery.SchemaField("exchange_date", "DATE", mode="REQUIRED"),
+    bigquery.SchemaField("date_key", "INT64", mode="REQUIRED"),
     bigquery.SchemaField("base_currency", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("target_currency", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("rate", "NUMERIC", mode="REQUIRED"),
@@ -170,7 +170,6 @@ dim_time_schema = [
 ensure_table(
     fact_table_id,
     fact_schema,
-    time_partitioning=bigquery.TimePartitioning(field="exchange_date"),
 )
 ensure_table(dim_time_table_id, dim_time_schema)
 
@@ -236,30 +235,45 @@ df_to_insert["fetched_at"] = (
     .dt.floor("us")
 )
 
-min_date = df_to_insert["exchange_date"].min()
-max_date = df_to_insert["exchange_date"].max()
+df_to_insert = df_to_insert.merge(
+    dim_time_df[["date", "date_key"]],
+    left_on="exchange_date",
+    right_on="date",
+    how="left",
+    validate="many_to_one",
+)
+
+if df_to_insert["date_key"].isna().any():
+    missing = sorted(df_to_insert.loc[df_to_insert["date_key"].isna(), "exchange_date"].unique())
+    raise SystemExit(f"Unable to find date_key for dates: {missing}")
+
+df_to_insert["date_key"] = df_to_insert["date_key"].astype("int64")
+df_to_insert = df_to_insert.drop(columns=["date"])
+
+min_key = int(df_to_insert["date_key"].min())
+max_key = int(df_to_insert["date_key"].max())
 
 existing_keys = set()
 query = f"""
-SELECT exchange_date, base_currency, target_currency
+SELECT date_key, base_currency, target_currency
 FROM `{fact_table_id}`
-WHERE exchange_date BETWEEN @min_date AND @max_date
+WHERE date_key BETWEEN @min_key AND @max_key
 """
 query_job = client.query(
     query,
     job_config=bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter("min_date", "DATE", min_date),
-            bigquery.ScalarQueryParameter("max_date", "DATE", max_date),
+            bigquery.ScalarQueryParameter("min_key", "INT64", min_key),
+            bigquery.ScalarQueryParameter("max_key", "INT64", max_key),
         ]
     ),
 )
 for row in query_job:
-    existing_keys.add((row.exchange_date, row.base_currency, row.target_currency))
+    existing_keys.add((row.date_key, row.base_currency, row.target_currency))
 
 df_to_insert["__key"] = list(
     zip(
-        df_to_insert["exchange_date"],
+        df_to_insert["date_key"],
         df_to_insert["base_currency"],
         df_to_insert["target_currency"],
     )
@@ -268,9 +282,10 @@ df_to_insert = df_to_insert[~df_to_insert["__key"].isin(existing_keys)].drop(col
 
 # Stable id derived from the natural key to keep deterministic values across reruns
 if not df_to_insert.empty:
+    df_to_insert = df_to_insert.drop(columns=["exchange_date"])
     df_to_insert["id"] = (
         pd.util.hash_pandas_object(
-            df_to_insert[["exchange_date", "base_currency", "target_currency"]],
+            df_to_insert[["date_key", "base_currency", "target_currency"]],
             index=False
         )
         .astype("int64")
