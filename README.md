@@ -1,80 +1,73 @@
 # exchange-rates - Portfolio
 
-A small end-to-end project that fetches historical foreign exchange rates, enriches currency metadata, and stores cleaned data in a local SQLite data warehouse. Includes automation via GitHub Actions and optional persistence to Google Cloud Storage (GCS).  
+An end-to-end project that fetches historical FX data, enriches currency metadata, and loads curated fact/dimension tables into Google BigQuery for downstream analytics (e.g., Power BI). GitHub Actions orchestrates the daily pipeline so the warehouse stays current without any local SQLite dependencies.
 
 ## Highlights
-- Fetch historical exchange rates for the last N days and save responses to JSON (`fetch_historical_rate/data/historical_exchange_rates.json`).
-- Add Perth (Australia) timestamps to fetched records.
-- Transform JSON -> tidy fact table and load into SQLite (`fetch_historical_rate/exchange_rates.db`).
-- Deduplication logic when loading to the DB (avoids duplicate (exchange_date, base_currency, target_currency) rows).
-- Create and seed a currency dimension (`dim_currency`) from a CSV.
-- CI automation: GitHub Actions workflow to run fetch + ETL daily at midnight Perth (schedule) and manually (workflow_dispatch).
-- Persistence options: workflow uploads `exchange_rates.db` as an artifact and can upload the DB to a GCS bucket using a service account.
+- Fetch historical exchange rates for the last N days and persist API responses to JSON (`fetch_historical_exchange_rate/data/historical_exchange_rates.json`).
+- Add Australia/Perth timestamps to each record for auditing.
+- Transform JSON into a tidy fact table (`fact_exchange_rate`) and regenerate supporting dimensions (`dim_time`, `dim_currency`) directly in BigQuery.
+- Deduplicate fact loads by comparing `(date_key, base_currency, target_currency)` keys already stored in BigQuery.
+- CI automation: GitHub Actions runs the fetch + dimension + fact steps daily at midnight Perth and on demand (`workflow_dispatch`), authenticating to GCP with a service account.
+- Power BI (or any BI tool) can connect straight to BigQuery to query curated fact/dimension tables.
 
 ## Repo layout
-- fetch_historical_exchange_rate/
-  - data/
-    - historical_exchange_rates.json
-    - currencies.csv
-    - logs/
-  - scripts/
-    - fetch_historical_rate.py        # fetches historical rates (writes JSON)
-    - extract_transform.py           # transforms JSON -> fact_exchange_rate and loads DB
-    - create_dim_currency.py         # creates/seeds dim_currency from CSV
-  - exchange_rates.db                # created by scripts (in repository)
-  - sql/
-    - remove_duplicates.sql
-    - validation_queries.sql 
-- .github/workflows/
-  - daily_pipeline.yml               # GitHub Actions workflow (schedule + manual)
-- README.md
-- .env (local; NOT committed)
+- `fetch_historical_exchange_rate/`
+  - `data/`
+    - `historical_exchange_rates.json` – append-only cache of API responses.
+    - `currencies.csv` – seed file for the currency dimension (supports multiple codes per line).
+  - `scripts/`
+    - `fetch_historical_rate.py` – fetches historical rates, writes JSON, tags Perth timestamps.
+    - `extract_transform.py` – builds `dim_time` and loads `fact_exchange_rate` into BigQuery.
+    - `create_dim_currency.py` – ingests the CSV into a staging table and MERGEs into BigQuery `dim_currency`.
+- `.github/workflows/daily_pipeline.yml` – scheduled + manual GitHub Actions workflow.
+- `.env` – local-only file holding `EXCHANGE_API_KEY` (not committed).
+- `README.md`, `requirements.txt`, etc.
 
 ## Requirements
-- Python 3.9+
-- pip packages: requests, pandas, sqlalchemy, python-dotenv
-- Optional (local): gcloud SDK to test GCS uploads
-- GitHub: repo configured with required Secrets for workflows
+- Python 3.11+ recommended.
+- pip packages: `requests`, `pandas`, `google-cloud-bigquery`, `pyarrow`, `python-dotenv`, `zoneinfo` (Py3.9+).
+- Google Cloud project with BigQuery API enabled and a dataset (default: `my-project-lab-477712.exchange-rates`).
+- Service account JSON with `BigQuery Data Editor` + `BigQuery Job User` roles for CI/local runs.
+- GitHub secrets: `EXCHANGE_API_KEY`, `GCP_SA_KEY`, `BQ_PROJECT`, `BQ_DATASET`, `BQ_LOCATION`.
 
 ## How to run locally
-1. Ensure venv and requirements installed.
-2. Add your API key to repo-root `.env`.
-3. Run fetch:
-```bash
-cd fetch_historical_rate
-python3 scripts/fetch_historical_rate.py
-```
-4. Run transform & load:
-```bash
-python3 scripts/extract_transform.py
-```
+1. Create/activate a virtualenv and install requirements: `pip install -r fetch_historical_exchange_rate/requirements.txt` (or install `requests pandas google-cloud-bigquery pyarrow python-dotenv`).
+2. Add your API key to `.env` at the repo root: `EXCHANGE_API_KEY=...`.
+3. Export BigQuery settings for local runs (or place them in `.env`):
+   ```bash
+   export BQ_PROJECT=my-project-lab-477712
+   export BQ_DATASET=exchange-rates
+   export BQ_LOCATION=US
+   export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+   ```
+4. Fetch recent data:
+   ```bash
+   cd fetch_historical_exchange_rate
+   python3 scripts/fetch_historical_rate.py
+   ```
+5. Load dimensions/fact into BigQuery:
+   ```bash
+   python3 scripts/create_dim_currency.py
+   python3 scripts/extract_transform.py
+   ```
+6. Verify tables in BigQuery (`bq show` or the console) and connect your BI tool to the dataset.
 
 ## GitHub Actions: daily pipeline
 - Location: `.github/workflows/daily_pipeline.yml`
-- Schedule: cron `0 16 * * *` (16:00 UTC → 00:00 AWST / Australia/Perth)
-- Manual runs: `workflow_dispatch` enabled for ad-hoc execution
-- The workflow:
-  - Checks out repo
-  - Installs dependencies
-  - Writes `.env` from `EXCHANGE_API_KEY` secret
-  - Runs fetch and ETL scripts capturing logs
-  - Uploads artifacts:
-    - `exchange_rates_db` (exchange_rates.db)
-    - `pipeline-logs` (logs directory)
-  - Optionally authenticates to GCP and uploads the DB to a GCS path with timestamped filename
-
-## GCS persistence (implemented)
-- Service account JSON stored in `GCP_SA_KEY` secret
-- Workflow uses `google-github-actions/auth` and `google-github-actions/setup-gcloud` to authenticate
-- The DB is copied to `gs://$GCS_BUCKET/$GCS_PATH/exchange_rates-<timestamp>.db`
+- Schedule: cron `0 16 * * *` (16:00 UTC → 00:00 AWST / Australia/Perth); manual trigger via `workflow_dispatch`.
+- Steps:
+  1. Checkout + set up Python.
+  2. Install dependencies (including BigQuery client/pyarrow).
+  3. Write `.env` with `EXCHANGE_API_KEY`.
+  4. Authenticate to GCP via `google-github-actions/auth` using `GCP_SA_KEY`.
+  5. Run `fetch_historical_rate.py`, `create_dim_currency.py`, and `extract_transform.py` (all targeting BigQuery). Logs stream to the Actions UI.
+- Outputs: no SQLite artifacts; data lands in BigQuery directly, so analytics tools can refresh immediately after the workflow finishes.
 
 ## Implementation Summary
-- Demonstrates full-stack data engineering:
-  - data ingestion (API),
-  - enrichment (external APIs + caching),
-  - transformation (Pandas -> normalized fact table),
-  - warehousing (SQLite),
-  - automation (GitHub Actions),
-  - cloud persistence (GCS),
-- All code is organised, path-resilient (uses Path-based resolution), and automatable.
-- Workflow and scripts are reusable and extensible (e.g., add S3 instead of GCS, add more currencies, schedule frequency changes).
+- Demonstrates a modern data-engineering pipeline:
+  - Ingestion: Python client hits the FX API, respecting existing cached dates.
+  - Enrichment: adds Perth timestamps, handles malformed responses, and normalizes nested JSON.
+  - Warehousing: loads curated facts/dimensions into BigQuery (numeric precision, deduping, time dimension regeneration, currency dim MERGE).
+  - Automation: GitHub Actions schedules daily refreshes and can be triggered manually.
+  - Analytics: Power BI (or any BI tool) connects directly to BigQuery tables (`fact_exchange_rate`, `dim_currency`, `dim_time`).
+- Code is path-resilient (Pathlib), cloud-ready, and easily extendable (add more currencies, switch to other cloud warehouses, adjust schedules, etc.).
