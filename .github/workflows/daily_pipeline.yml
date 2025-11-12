@@ -28,7 +28,7 @@ jobs:
 
       - name: Prepare .env (from Secrets)
         run: |
-          echo "EXCHANGE_API_KEY=${{ secrets.EXCHANGE_API_KEY }}" > fetch_historical_exchange_rate/.env
+          echo "EXCHANGE_API_KEY=${{ secrets.EXCHANGE_API_KEY }}" > .env
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v1
