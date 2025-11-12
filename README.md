@@ -26,7 +26,7 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
 ## Requirements
 - Python 3.11+ recommended.
 - pip packages: `requests`, `pandas`, `google-cloud-bigquery`, `pyarrow`, `python-dotenv`, `zoneinfo` (Py3.9+).
-- Google Cloud project with BigQuery API enabled and a dataset (default: `my-project-lab-477712.exchange-rates`).
+- Google Cloud project with BigQuery API enabled and a dataset specified via env vars (see below).
 - Service account JSON with `BigQuery Data Editor` + `BigQuery Job User` roles for CI/local runs.
 - GitHub secrets: `EXCHANGE_API_KEY`, `GCP_SA_KEY`, `BQ_PROJECT`, `BQ_DATASET`, `BQ_LOCATION`.
 
@@ -35,9 +35,9 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
 2. Add your API key to `.env` at the repo root: `EXCHANGE_API_KEY=...`.
 3. Export BigQuery settings for local runs (or place them in `.env`):
    ```bash
-   export BQ_PROJECT=my-project-lab-477712
-   export BQ_DATASET=exchange-rates
-   export BQ_LOCATION=US
+   export BQ_PROJECT=<your-project-id>
+   export BQ_DATASET=<your-dataset>
+   export BQ_LOCATION=<dataset-location>
    export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
    ```
 4. Fetch recent data:
