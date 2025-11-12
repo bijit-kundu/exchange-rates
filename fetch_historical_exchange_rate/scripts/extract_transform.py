@@ -20,6 +20,8 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+from decimal import Decimal, ROUND_HALF_UP, getcontext
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
@@ -114,7 +116,7 @@ dim_time_df = dim_time_df[
 
 # --- BigQuery configuration ---
 project_id = os.getenv("BQ_PROJECT", "my-project-lab-477712")
-dataset_id = os.getenv("BQ_DATASET", "exchange-rates")
+dataset_id = os.getenv("BQ_DATASET", "exchange_rates")
 dataset_ref = bigquery.DatasetReference(project_id, dataset_id)
 
 client = bigquery.Client(project=project_id)
@@ -143,12 +145,13 @@ def ensure_table(table_id: str, schema, time_partitioning=None):
 
 
 fact_schema = [
+    bigquery.SchemaField("id", "INT64", mode="REQUIRED"),
     bigquery.SchemaField("exchange_date", "DATE", mode="REQUIRED"),
     bigquery.SchemaField("base_currency", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("target_currency", "STRING", mode="REQUIRED"),
-    bigquery.SchemaField("rate", "FLOAT"),
-    bigquery.SchemaField("timestamp", "STRING"),
-    bigquery.SchemaField("fetched_at", "TIMESTAMP"),
+    bigquery.SchemaField("rate", "NUMERIC", mode="REQUIRED"),
+    bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
+    bigquery.SchemaField("fetched_at", "TIMESTAMP", mode="REQUIRED"),
 ]
 
 dim_time_schema = [
@@ -171,6 +174,32 @@ ensure_table(
 )
 ensure_table(dim_time_table_id, dim_time_schema)
 
+ARROW_TYPE_MAP = {
+    "INT64": pa.int64(),
+    "DATE": pa.date32(),
+    "STRING": pa.string(),
+    "BOOL": pa.bool_(),
+    "NUMERIC": pa.decimal128(38, 9),
+    "TIMESTAMP": pa.timestamp("us"),
+}
+
+
+def validate_against_schema(dataframe: pd.DataFrame, schema_fields):
+    """Attempt Arrow conversion per column to catch schema/dtype mismatches early."""
+    for field in schema_fields:
+        if field.name not in dataframe.columns:
+            raise ValueError(f"Missing required column '{field.name}' for BigQuery load.")
+        arrow_type = ARROW_TYPE_MAP.get(field.field_type)
+        if arrow_type is None:
+            continue
+        series = dataframe[field.name]
+        try:
+            pa.Array.from_pandas(series, type=arrow_type)
+        except (pa.ArrowInvalid, pa.ArrowTypeError) as err:
+            raise ValueError(
+                f"Column '{field.name}' (dtype={series.dtype}) failed conversion to {field.field_type}: {err}"
+            ) from err
+
 # Load/refresh dim_time (truncate + reload)
 dim_time_job_cfg = bigquery.LoadJobConfig(
     write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
@@ -181,13 +210,31 @@ dim_time_load.result()
 print(f"Loaded {len(dim_time_df)} rows into {dim_time_table_id}.")
 
 # Prepare fact data and drop duplicates already present in BigQuery
+getcontext().prec = 38
+
 df_to_insert = df.copy()
 df_to_insert["exchange_date"] = df_to_insert["exchange_date"].dt.date
 df_to_insert["base_currency"] = df_to_insert["base_currency"].astype(str)
 df_to_insert["target_currency"] = df_to_insert["target_currency"].astype(str)
-df_to_insert["rate"] = pd.to_numeric(df_to_insert["rate"], errors="coerce")
-df_to_insert["timestamp"] = df_to_insert["timestamp"].astype(str)
-df_to_insert["fetched_at"] = pd.to_datetime(df_to_insert["fetched_at"], errors="coerce")
+
+numeric_rates = pd.to_numeric(df_to_insert["rate"], errors="coerce")
+
+def to_decimal(value):
+    if pd.isna(value):
+        return None
+    return Decimal(str(value)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+
+df_to_insert["rate"] = numeric_rates.apply(to_decimal)
+df_to_insert["timestamp"] = (
+    pd.to_datetime(df_to_insert["timestamp"], unit="s", errors="coerce", utc=True)
+    .dt.tz_convert(None)
+    .dt.floor("us")
+)
+df_to_insert["fetched_at"] = (
+    pd.to_datetime(df_to_insert["fetched_at"], errors="coerce", utc=True)
+    .dt.tz_convert(None)
+    .dt.floor("us")
+)
 
 min_date = df_to_insert["exchange_date"].min()
 max_date = df_to_insert["exchange_date"].max()
@@ -219,6 +266,17 @@ df_to_insert["__key"] = list(
 )
 df_to_insert = df_to_insert[~df_to_insert["__key"].isin(existing_keys)].drop(columns="__key")
 
+# Stable id derived from the natural key to keep deterministic values across reruns
+if not df_to_insert.empty:
+    df_to_insert["id"] = (
+        pd.util.hash_pandas_object(
+            df_to_insert[["exchange_date", "base_currency", "target_currency"]],
+            index=False
+        )
+        .astype("int64")
+        .abs()
+    )
+
 if df_to_insert.empty:
     print("No new rows to insert into fact_exchange_rate.")
 else:
@@ -226,8 +284,17 @@ else:
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
         schema=fact_schema,
     )
-    load_job = client.load_table_from_dataframe(df_to_insert, fact_table_id, job_config=fact_job_cfg)
-    load_job.result()
+    try:
+        validate_against_schema(df_to_insert, fact_schema)
+        load_job = client.load_table_from_dataframe(df_to_insert, fact_table_id, job_config=fact_job_cfg)
+        load_job.result()
+    except Exception as exc:
+        print("BigQuery load failed. Column diagnostics:")
+        for col in df_to_insert.columns:
+            series = df_to_insert[col]
+            sample = series.dropna().iloc[0] if not series.dropna().empty else "NaN"
+            print(f"- {col}: dtype={series.dtype}, sample={sample}")
+        raise
     print(f"Inserted {len(df_to_insert)} new rows into {fact_table_id}.")
 
 count_job = client.query(f"SELECT COUNT(*) AS cnt FROM `{fact_table_id}`")
