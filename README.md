@@ -3,7 +3,7 @@
 An end-to-end project that fetches historical FX data, enriches currency metadata, and loads curated fact/dimension tables into Google BigQuery for downstream analytics (e.g., Power BI). GitHub Actions orchestrates the daily pipeline so the warehouse stays current without any local SQLite dependencies.
 
 ## Highlights
-- Fetch historical exchange rates for the last N days and persist API responses to JSON (`fetch_historical_exchange_rate/data/historical_exchange_rates.json`).
+- Fetch AUD-based exchange rates (EUR, USD, GBP, SGD) for the last N days and persist API responses to JSON (`fetch_historical_exchange_rate/data/historical_exchange_rates.json`).
 - Add Australia/Perth timestamps to each record for auditing.
 - Transform JSON into a tidy fact table (`fact_exchange_rate`) and regenerate supporting dimensions (`dim_time`, `dim_currency`) directly in BigQuery.
 - Deduplicate fact loads by comparing `(date_key, base_currency, target_currency)` keys already stored in BigQuery.
@@ -16,7 +16,8 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
     - `historical_exchange_rates.json` – append-only cache of API responses.
     - `currencies.csv` – seed file for the currency dimension (supports multiple codes per line).
   - `scripts/`
-    - `fetch_historical_rate.py` – fetches historical rates, writes JSON, tags Perth timestamps.
+    - `fetch_historical_rate.py` – fetches the most recent day(s), writes JSON, tags Perth timestamps.
+    - `backfill_historical_rates.py` – one-off loader that splits 10 years of history into 5 chunks for easier retry.
     - `extract_transform.py` – builds `dim_time` and loads `fact_exchange_rate` into BigQuery.
     - `create_dim_currency.py` – ingests the CSV into a staging table and MERGEs into BigQuery `dim_currency`.
 - `.github/workflows/daily_pipeline.yml` – scheduled + manual GitHub Actions workflow.
@@ -45,12 +46,17 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
    cd fetch_historical_exchange_rate
    python3 scripts/fetch_historical_rate.py
    ```
-5. Load dimensions/fact into BigQuery:
+5. (Optional) Run a one-time 10-year backfill:
+   ```bash
+   python3 scripts/backfill_historical_rates.py
+   ```
+6. Load dimensions/fact into BigQuery:
    ```bash
    python3 scripts/create_dim_currency.py
    python3 scripts/extract_transform.py
    ```
-6. Verify tables in BigQuery (`bq show` or the console) and connect your BI tool to the dataset.
+7. Verify tables in BigQuery (`bq show` or the console) and connect your BI tool to the dataset.
+8. Set `FETCH_DAYS=1` (default) so the daily pipeline only appends the latest day after the backfill completes.
 
 ## GitHub Actions: daily pipeline
 - Location: `.github/workflows/daily_pipeline.yml`
