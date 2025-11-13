@@ -33,6 +33,7 @@ except NotFound:
 table_id = f"{project_id}.{dataset_id}.dim_currency"
 stage_table_id = f"{project_id}.{dataset_id}.dim_currency_stage"
 schema = [
+    bigquery.SchemaField("currency_key", "INT64", mode="REQUIRED"),
     bigquery.SchemaField("currency_code", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("currency_name", "STRING"),
 ]
@@ -68,11 +69,31 @@ if not rows:
     raise SystemExit("No currency rows found to load.")
 
 # Build stable payload for load job (sorted to make debugging easier)
-rows_payload = [
-    {"currency_code": code, "currency_name": name or None}
-    for code, name in rows
-]
-rows_payload.sort(key=lambda r: r["currency_code"])
+# Existing codes retain their numeric key; new codes get sequential ids so fact table
+# can reference a durable surrogate key.
+existing_map = {}
+max_key = 0
+try:
+    query = client.query(f"SELECT currency_code, currency_key FROM `{table_id}`")
+    for row in query:
+        existing_map[row.currency_code] = row.currency_key
+        max_key = max(max_key, row.currency_key or 0)
+except NotFound:
+    pass
+
+rows_payload = []
+next_key = max_key + 1
+for code, name in sorted(rows, key=lambda item: item[0]):
+    key = existing_map.get(code)
+    if key is None:
+        key = next_key
+        next_key += 1
+        existing_map[code] = key
+    rows_payload.append({
+        "currency_key": key,
+        "currency_code": code,
+        "currency_name": name or None
+    })
 
 # Truncate/reload staging table on every run so merges see a clean snapshot
 load_config = bigquery.LoadJobConfig(
@@ -89,8 +110,8 @@ MERGE `{table_id}` T
 USING `{stage_table_id}` S
 ON T.currency_code = S.currency_code
 WHEN MATCHED THEN UPDATE SET currency_name = S.currency_name
-WHEN NOT MATCHED THEN INSERT (currency_code, currency_name)
-VALUES (S.currency_code, S.currency_name)
+WHEN NOT MATCHED THEN INSERT (currency_key, currency_code, currency_name)
+VALUES (S.currency_key, S.currency_code, S.currency_name)
 """
 
 try:

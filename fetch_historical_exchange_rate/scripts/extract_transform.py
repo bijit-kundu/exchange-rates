@@ -145,11 +145,12 @@ def ensure_table(table_id: str, schema, time_partitioning=None):
         print(f"Created table {table_id}")
 
 
+# Fact table now stores numeric FKs that reference dim_currency.currency_key
 fact_schema = [
     bigquery.SchemaField("id", "INT64", mode="REQUIRED"),
     bigquery.SchemaField("date_key", "INT64", mode="REQUIRED"),
-    bigquery.SchemaField("base_currency", "STRING", mode="REQUIRED"),
-    bigquery.SchemaField("target_currency", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("base_currency_key", "INT64", mode="REQUIRED"),
+    bigquery.SchemaField("target_currency_key", "INT64", mode="REQUIRED"),
     bigquery.SchemaField("rate", "NUMERIC", mode="REQUIRED"),
     bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
     bigquery.SchemaField("fetched_at", "TIMESTAMP", mode="REQUIRED"),
@@ -218,6 +219,33 @@ df_to_insert["exchange_date"] = df_to_insert["exchange_date"].dt.date
 df_to_insert["base_currency"] = df_to_insert["base_currency"].astype(str)
 df_to_insert["target_currency"] = df_to_insert["target_currency"].astype(str)
 
+# Pull currency keys and attach them to base/target codes so fact rows reference dim_currency
+currency_lookup = client.query(
+    f"SELECT currency_code, currency_key FROM `{project_id}.{dataset_id}.dim_currency`"
+).to_dataframe()
+currency_lookup = currency_lookup.dropna(subset=["currency_key"]).drop_duplicates("currency_code")
+
+df_to_insert = df_to_insert.merge(
+    currency_lookup.rename(columns={"currency_key": "base_currency_key"}),
+    left_on="base_currency",
+    right_on="currency_code",
+    how="left",
+)
+df_to_insert = df_to_insert.merge(
+    currency_lookup.rename(columns={"currency_key": "target_currency_key"}),
+    left_on="target_currency",
+    right_on="currency_code",
+    how="left",
+)
+
+if df_to_insert["base_currency_key"].isna().any() or df_to_insert["target_currency_key"].isna().any():
+    missing_base = sorted(df_to_insert.loc[df_to_insert["base_currency_key"].isna(), "base_currency"].unique())
+    missing_target = sorted(df_to_insert.loc[df_to_insert["target_currency_key"].isna(), "target_currency"].unique())
+    raise SystemExit(
+        f"Missing currency keys for base={missing_base} target={missing_target}. "
+        "Ensure dim_currency has numeric keys for all codes."
+    )
+
 numeric_rates = pd.to_numeric(df_to_insert["rate"], errors="coerce")
 
 def to_decimal(value):
@@ -259,7 +287,7 @@ print(f"Fact batch spans date_key range {min_key} -> {max_key}. Checking existin
 
 existing_keys = set()
 query = f"""
-SELECT date_key, base_currency, target_currency
+SELECT date_key, base_currency_key, target_currency_key
 FROM `{fact_table_id}`
 WHERE date_key BETWEEN @min_key AND @max_key
 """
@@ -273,28 +301,28 @@ query_job = client.query(
     ),
 )
 for row in query_job:
-    existing_keys.add((row.date_key, row.base_currency, row.target_currency))
+    existing_keys.add((row.date_key, row.base_currency_key, row.target_currency_key))
 print(f"Existing keys within range: {len(existing_keys)}.")
 
 df_to_insert["__key"] = list(
     zip(
         df_to_insert["date_key"],
-        df_to_insert["base_currency"],
-        df_to_insert["target_currency"],
+        df_to_insert["base_currency_key"],
+        df_to_insert["target_currency_key"],
     )
 )
 # Drop anything already present in the warehouse to keep the fact table idempotent
 df_to_insert = df_to_insert[~df_to_insert["__key"].isin(existing_keys)].drop(columns="__key")
 
 if not df_to_insert.empty:
-    df_to_insert = df_to_insert.drop(columns=["exchange_date"])
+    df_to_insert = df_to_insert.drop(columns=["exchange_date", "currency_code_x", "currency_code_y"])
     # Continue identity sequence locally so BigQuery receives deterministic ids
     max_id_query = client.query(f"SELECT COALESCE(MAX(id), 0) AS max_id FROM `{fact_table_id}`")
     max_id = int(next(max_id_query.result()).max_id)
     start_id = max_id + 1
     df_to_insert["id"] = range(start_id, start_id + len(df_to_insert))
     df_to_insert = df_to_insert[
-        ["id", "date_key", "base_currency", "target_currency", "rate", "timestamp", "fetched_at"]
+        ["id", "date_key", "base_currency_key", "target_currency_key", "rate", "timestamp", "fetched_at"]
     ]
 
 if df_to_insert.empty:
