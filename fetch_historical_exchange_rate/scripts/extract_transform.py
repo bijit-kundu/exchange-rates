@@ -134,6 +134,7 @@ dim_time_table_id = f"{project_id}.{dataset_id}.dim_time"
 
 
 def ensure_table(table_id: str, schema, time_partitioning=None):
+    """Create the table on first run so later loads can assume it exists."""
     try:
         client.get_table(table_id)
     except NotFound:
@@ -220,6 +221,7 @@ df_to_insert["target_currency"] = df_to_insert["target_currency"].astype(str)
 numeric_rates = pd.to_numeric(df_to_insert["rate"], errors="coerce")
 
 def to_decimal(value):
+    """BigQuery NUMERIC expects exact precision; convert floats safely."""
     if pd.isna(value):
         return None
     return Decimal(str(value)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
@@ -281,10 +283,12 @@ df_to_insert["__key"] = list(
         df_to_insert["target_currency"],
     )
 )
+# Drop anything already present in the warehouse to keep the fact table idempotent
 df_to_insert = df_to_insert[~df_to_insert["__key"].isin(existing_keys)].drop(columns="__key")
 
 if not df_to_insert.empty:
     df_to_insert = df_to_insert.drop(columns=["exchange_date"])
+    # Continue identity sequence locally so BigQuery receives deterministic ids
     max_id_query = client.query(f"SELECT COALESCE(MAX(id), 0) AS max_id FROM `{fact_table_id}`")
     max_id = int(next(max_id_query.result()).max_id)
     start_id = max_id + 1

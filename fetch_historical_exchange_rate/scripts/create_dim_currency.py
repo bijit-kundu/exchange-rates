@@ -5,6 +5,7 @@ from pathlib import Path
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
+# Resolve repo paths once so the script works regardless of CWD
 base_dir = Path(__file__).resolve().parents[1]
 csv_path = base_dir / "data" / "currencies.csv"
 
@@ -49,6 +50,7 @@ if csv_path.exists():
         reader = csv.reader(f)
         next(reader, None)
         rows = []
+        # Some rows contain multiple ISO codes (e.g., "MXN MXV"); split and treat individually
         for idx, r in enumerate(reader, start=2):
             if not r:
                 continue
@@ -65,12 +67,14 @@ if csv_path.exists():
 if not rows:
     raise SystemExit("No currency rows found to load.")
 
+# Build stable payload for load job (sorted to make debugging easier)
 rows_payload = [
     {"currency_code": code, "currency_name": name or None}
     for code, name in rows
 ]
 rows_payload.sort(key=lambda r: r["currency_code"])
 
+# Truncate/reload staging table on every run so merges see a clean snapshot
 load_config = bigquery.LoadJobConfig(
     write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
     schema=schema,

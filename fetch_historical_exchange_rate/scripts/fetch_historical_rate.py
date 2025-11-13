@@ -55,9 +55,11 @@ except json.JSONDecodeError:
     # if the file is corrupted or empty, start clean
     existing_data = []
 
+# Track dates already present so we can skip redundant requests (API friendly)
 existing_dates = {item.get("date") for item in existing_data if isinstance(item, dict) and item.get("date")}
 
 # --- Prepare request parameters ---
+# Template shared by every request; only the URL path changes per date
 params_template = {
     "access_key": API_KEY,
     "base": BASE_CURRENCY,

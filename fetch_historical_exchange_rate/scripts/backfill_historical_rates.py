@@ -53,6 +53,7 @@ perth_tz = ZoneInfo("Australia/Perth")
 
 
 def load_existing_records(path: Path) -> Tuple[list, set]:
+    """Return cached rows plus a set of already-seen dates for quick skip checks."""
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -74,6 +75,7 @@ def daterange(start: date, end: date) -> Iterable[date]:
 
 
 def chunk_ranges(start: date, end: date, chunks: int) -> list[Tuple[date, date]]:
+    """Evenly split the requested window into smaller segments for easier retries."""
     total_days = (end - start).days + 1
     chunk_size = max(1, total_days // chunks)
     ranges = []
@@ -116,6 +118,7 @@ def fetch_date(target_date: date, params: dict) -> dict | None:
 def main():
     existing_data, existing_dates = load_existing_records(output_file)
 
+    # Determine the window to pull, falling back to 10-year history if unset
     if BACKFILL_END_DATE:
         try:
             normalized = BACKFILL_END_DATE.replace("-", "")
@@ -155,6 +158,7 @@ def main():
         print(f"=== Chunk {idx}/{len(ranges)}: {chunk_start} -> {chunk_end} ===")
         chunk_inserted = 0
         for current_date in daterange(chunk_start, chunk_end):
+            # Skip anything we've already persisted locally (keeps requests minimal)
             date_str = current_date.isoformat()
             if date_str in existing_dates:
                 continue
