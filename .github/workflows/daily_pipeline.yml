@@ -25,6 +25,8 @@ jobs:
           else
             pip install requests pandas google-cloud-bigquery pyarrow python-dotenv
           fi
+          # ensure db-dtypes is always available for BigQuery dataframe loads
+          pip install db-dtypes
 
       - name: Prepare .env (from Secrets)
         run: |
