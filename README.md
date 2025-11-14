@@ -11,6 +11,9 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
 - CI automation: GitHub Actions runs the fetch + dimension + fact steps daily at midnight Perth and on demand (`workflow_dispatch`), authenticating to GCP with a service account.
 - Power BI (or any BI tool) can connect straight to BigQuery to query curated fact/dimension tables.
 
+## Data Source
+- Historical FX data is retrieved from https://api.exchangeratesapi.io/v1/ (see their docs for API terms and coverage).
+
 ## Repo layout
 - `fetch_historical_exchange_rate/`
   - `data/`
