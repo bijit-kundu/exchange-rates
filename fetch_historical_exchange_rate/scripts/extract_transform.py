@@ -201,15 +201,22 @@ def validate_against_schema(dataframe: pd.DataFrame, schema_fields):
                 f"Column '{field.name}' (dtype={series.dtype}) failed conversion to {field.field_type}: {err}"
             ) from err
 
-# Load/refresh dim_time (truncate + reload)
-dim_time_job_cfg = bigquery.LoadJobConfig(
-    write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-    schema=dim_time_schema,
-)
-print(f"Loading dim_time ({len(dim_time_df)} rows) into {dim_time_table_id}...")
-dim_time_load = client.load_table_from_dataframe(dim_time_df, dim_time_table_id, job_config=dim_time_job_cfg)
-dim_time_load.result()
-print(f"dim_time load complete.")
+# Load/refresh dim_time (append only new calendar dates)
+existing_dim = client.query(f"SELECT date_key FROM `{dim_time_table_id}`").result()
+existing_dim_keys = {row.date_key for row in existing_dim if row.date_key is not None}
+dim_time_to_insert = dim_time_df[~dim_time_df["date_key"].isin(existing_dim_keys)]
+
+if dim_time_to_insert.empty:
+    print(f"No new rows for {dim_time_table_id}; existing calendar retained.")
+else:
+    dim_time_job_cfg = bigquery.LoadJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        schema=dim_time_schema,
+    )
+    print(f"Loading {len(dim_time_to_insert)} new rows into {dim_time_table_id}...")
+    dim_time_load = client.load_table_from_dataframe(dim_time_to_insert, dim_time_table_id, job_config=dim_time_job_cfg)
+    dim_time_load.result()
+    print("dim_time load complete.")
 
 # Prepare fact data and drop duplicates already present in BigQuery
 getcontext().prec = 38
