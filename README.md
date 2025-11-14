@@ -12,7 +12,7 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
 - Power BI (or any BI tool) can connect straight to BigQuery to query curated fact/dimension tables.
 
 ## Data Source
-- Historical FX data is retrieved from https://api.exchangeratesapi.io/v1/ (see their docs for API terms and coverage).
+- Historical FX data is retrieved from https://api.exchangeratesapi.io/ (see their docs for API terms and coverage).
 
 ## Repo layout
 - `fetch_historical_exchange_rate/`
