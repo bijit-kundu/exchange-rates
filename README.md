@@ -5,9 +5,9 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
 ## Highlights
 - Fetch AUD-based exchange rates (EUR, USD, GBP, SGD) for the last N days and persist API responses to JSON (`fetch_historical_exchange_rate/data/historical_exchange_rates.json`).
 - Add Australia/Perth timestamps to each record for auditing.
-- Transform JSON into a tidy fact table (`fact_exchange_rate`) and regenerate the `dim_time` calendar dimension directly in BigQuery. Fact rows store numeric foreign keys (`base_currency_key`, `target_currency_key`) that reference `dim_currency`.
-- Maintain `dim_currency` via an on-demand script that MERGEs CSV updates into BigQuery (run when the seed list changes).
-- Deduplicate fact loads by comparing `(date_key, base_currency, target_currency)` keys already stored in BigQuery.
+- Transform JSON into a clean analytics-ready dataset in BigQuery, automatically growing the calendar and currency lookups as new data arrives.
+- Maintain the currency lookup via an on-demand script that syncs the CSV seed list into BigQuery (run when the seed list changes).
+- Deduplicate daily inserts by checking whether each date/currency combination already exists in BigQuery before writing.
 - CI automation: GitHub Actions runs the fetch + dimension + fact steps daily at midnight Perth and on demand (`workflow_dispatch`), authenticating to GCP with a service account.
 - Power BI (or any BI tool) can connect straight to BigQuery to query curated fact/dimension tables.
 
@@ -19,7 +19,7 @@ An end-to-end project that fetches historical FX data, enriches currency metadat
   - `scripts/`
     - `fetch_historical_rate.py` – fetches the most recent day(s), writes JSON, tags Perth timestamps.
     - `backfill_historical_rates.py` – one-off loader that splits 10 years of history into 5 chunks for easier retry.
-    - `extract_transform.py` – builds `dim_time` and loads `fact_exchange_rate` into BigQuery.
+    - `extract_transform.py` – maintains `dim_time` (appends only new dates) and loads `fact_exchange_rate` into BigQuery.
     - `create_dim_currency.py` – ingests the CSV into a staging table, assigns/maintains numeric `currency_key` surrogates, and MERGEs into BigQuery `dim_currency`.
 - `.github/workflows/daily_pipeline.yml` – scheduled + manual GitHub Actions workflow.
 - `.env` – local-only file holding `EXCHANGE_API_KEY` (not committed).
