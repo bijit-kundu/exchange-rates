@@ -2,7 +2,7 @@ name: daily-exchange-rates
 
 on:
   schedule:
-    - cron: '0 16 * * *' # 00:00 Australia/Perth -> 16:00 UTC previous day
+    - cron: '15 0 * * *'  # 00:15 UTC = 08:15 AWST Perth, Australia
   workflow_dispatch: {}
 
 jobs:
